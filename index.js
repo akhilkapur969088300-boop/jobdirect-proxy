@@ -240,7 +240,7 @@ const PLAN_PRODUCTS = {
   'com.jobdirect.app.resumepack.50':  { type: 'consumable', credits: 50 },
 };
 
-// ── The actual endpoint the app calls after a purchase completes ──
+// ── Main verification endpoint ───────────────────────────────
 app.post('/api/verify-purchase', async (req, res) => {
   try {
     const { platform, productId, transactionId, packageName, purchaseToken, sandbox } = req.body;
@@ -259,6 +259,24 @@ app.post('/api/verify-purchase', async (req, res) => {
 
     const grant = PLAN_PRODUCTS[productId];
     if (!grant) return res.status(400).json({ error: 'Unknown productId' });
+
+    if (!firebaseReady) return res.status(500).json({ error: 'Server database not configured' });
+
+    // ── Replay protection ──
+    // Without this, the same real transaction ID / purchase token could
+    // be submitted to this endpoint repeatedly, and since Apple/Google
+    // will keep confirming "yes, this transaction is real" every time
+    // (they don't track how many times you've asked), a consumable
+    // purchase (resume credit packs) could otherwise be replayed to
+    // keep granting credits indefinitely from a single real payment.
+    // Subscriptions re-set the same value on replay so are lower risk,
+    // but the same check applies uniformly for simplicity and safety.
+    const replayId = platform === 'ios' ? transactionId : purchaseToken;
+    const processedRef = db.collection('processed_transactions').doc(`${platform}_${replayId}`);
+    const alreadyProcessed = await processedRef.get();
+    if (alreadyProcessed.exists) {
+      return res.status(200).json({ success: true, note: 'Already processed — no action taken (replay prevented)' });
+    }
 
     let verified = false;
     let planSource = '';
@@ -297,16 +315,23 @@ app.post('/api/verify-purchase', async (req, res) => {
     // Admin SDK, which bypasses client Firestore rules entirely. This
     // is the actual fix: the client itself can no longer be the thing
     // that decides its own plan.
-    if (!firebaseReady) return res.status(500).json({ error: 'Server database not configured' });
-
     const userRef = db.collection('users').doc(uid);
     if (grant.type === 'subscription') {
       await userRef.set({ plan: grant.plan, planSource, updatedAt: new Date().toISOString() }, { merge: true });
-      return res.json({ success: true, type: 'subscription', plan: grant.plan });
     } else {
       const snap = await userRef.get();
       const current = snap.exists ? (snap.data().tailorCredits || 0) : 0;
       await userRef.set({ tailorCredits: current + grant.credits, planSource, updatedAt: new Date().toISOString() }, { merge: true });
+    }
+
+    // Mark this transaction as processed — must happen only after a
+    // successful grant, so a genuinely failed/retried request isn't
+    // wrongly blocked from ever succeeding.
+    await processedRef.set({ uid, productId, platform, processedAt: new Date().toISOString() });
+
+    if (grant.type === 'subscription') {
+      return res.json({ success: true, type: 'subscription', plan: grant.plan });
+    } else {
       return res.json({ success: true, type: 'consumable', credits: grant.credits });
     }
   } catch (e) {
@@ -317,4 +342,3 @@ app.post('/api/verify-purchase', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('JobDirect proxy running on port ' + PORT));
- 
