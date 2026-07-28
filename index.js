@@ -317,3 +317,4 @@ app.post('/api/verify-purchase', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('JobDirect proxy running on port ' + PORT));
+ 
