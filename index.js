@@ -143,7 +143,24 @@ function buildAppleJWT() {
   const keyId    = process.env.APPLE_KEY_ID;
   const issuerId = process.env.APPLE_ISSUER_ID;
   const bundleId = process.env.APPLE_BUNDLE_ID || 'com.jobdirect.app';
-  const privateKey = (process.env.APPLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  const rawKey = process.env.APPLE_PRIVATE_KEY || '';
+  const privateKey = rawKey.replace(/\\n/g, '\n');
+
+  // TEMPORARY DIAGNOSTIC — safe, reveals only structural metadata about
+  // the key (never its actual content) so we can pinpoint exactly how
+  // the stored value differs from a valid PEM key, instead of guessing
+  // at another regex fix blind. Remove once the real cause is found.
+  console.log('[apple-key-diagnostic]', JSON.stringify({
+    rawLength: rawKey.length,
+    processedLength: privateKey.length,
+    startsCorrectly: privateKey.startsWith('-----BEGIN PRIVATE KEY-----'),
+    endsCorrectly: privateKey.trim().endsWith('-----END PRIVATE KEY-----'),
+    newlineCount: (privateKey.match(/\n/g) || []).length,
+    hasCarriageReturn: privateKey.includes('\r'),
+    hasDoubleBackslashN: rawKey.includes('\\\\n'),
+    firstChars: privateKey.slice(0, 35),
+    lastChars: privateKey.slice(-35),
+  }));
 
   if (!keyId || !issuerId || !privateKey) {
     throw new Error('Apple App Store Server API credentials not configured');
