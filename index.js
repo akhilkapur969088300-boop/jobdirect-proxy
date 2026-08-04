@@ -144,23 +144,22 @@ function buildAppleJWT() {
   const issuerId = process.env.APPLE_ISSUER_ID;
   const bundleId = process.env.APPLE_BUNDLE_ID || 'com.jobdirect.app';
   const rawKey = process.env.APPLE_PRIVATE_KEY || '';
-  const privateKey = rawKey.replace(/\\n/g, '\n');
+  let privateKey = rawKey.replace(/\\n/g, '\n').trim();
 
-  // TEMPORARY DIAGNOSTIC — safe, reveals only structural metadata about
-  // the key (never its actual content) so we can pinpoint exactly how
-  // the stored value differs from a valid PEM key, instead of guessing
-  // at another regex fix blind. Remove once the real cause is found.
-  console.log('[apple-key-diagnostic]', JSON.stringify({
-    rawLength: rawKey.length,
-    processedLength: privateKey.length,
-    startsCorrectly: privateKey.startsWith('-----BEGIN PRIVATE KEY-----'),
-    endsCorrectly: privateKey.trim().endsWith('-----END PRIVATE KEY-----'),
-    newlineCount: (privateKey.match(/\n/g) || []).length,
-    hasCarriageReturn: privateKey.includes('\r'),
-    hasDoubleBackslashN: rawKey.includes('\\\\n'),
-    firstChars: privateKey.slice(0, 35),
-    lastChars: privateKey.slice(-35),
-  }));
+  // CONFIRMED ROOT CAUSE (via temporary diagnostic, since removed): the
+  // stored value was missing its PEM armor — only the raw base64 body
+  // survived, without the "-----BEGIN PRIVATE KEY-----" / "-----END
+  // PRIVATE KEY-----" wrapper lines. Node's crypto module can't
+  // recognize raw base64 as a valid key without that wrapper, which is
+  // exactly what caused every verification attempt to fail since this
+  // key was first set. This was very likely lost during copy/paste into
+  // Railway's variable field. Rather than rely on a perfect paste (which
+  // already failed once), this detects the missing wrapper and adds it
+  // back automatically — resilient to the same mistake on a future key
+  // rotation, not just a one-time patch of the current value.
+  if (privateKey && !privateKey.startsWith('-----BEGIN')) {
+    privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+  }
 
   if (!keyId || !issuerId || !privateKey) {
     throw new Error('Apple App Store Server API credentials not configured');
